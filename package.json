@@ -1,0 +1,18 @@
+{
+  "name": "trip-saathi",
+  "version": "0.1.0",
+  "description": "Trip Saathi whatsapp-web.js starter",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "dependencies": {
+    "axios": "^1.13.2",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.19.0"
+  },
+  "license": "MIT"
+}
