@@ -253,17 +253,29 @@ async function loadGroupAndMembersState(chat) {
     const participants = chat.participants || [];
     members = await Promise.all(participants.map(async (p) => {
       const memberId = p.id?._serialized || p.id?.user || 'unknown';
-      // Attempt to resolve contact name via WhatsApp API
-      let name = p.name || p.pushname || p.formattedName || p.id?.user || null;
+      // Attempt to resolve contact name via WhatsApp API (use global client)
+      let resolvedName = p.name || p.pushname || p.formattedName || p.id?.user || null;
       try {
-        const contact = await chat.client.getContactById(memberId);
-        name = contact?.name || contact?.pushname || contact?.verifiedName || contact?.shortName || contact?.number || name;
+        const contact = await client.getContactById(memberId);
+        resolvedName = contact?.name || contact?.pushname || contact?.verifiedName || contact?.shortName || contact?.number || resolvedName;
       } catch (_) {}
       const memberFile = path.join(dir, `${memberId}.json`);
       const existing = loadJSON(memberFile, null);
-      const state = existing || defaultMemberState(memberId, name);
-      // Ensure we persist if newly created
-      if (!existing) saveJSON(memberFile, state);
+      let state = existing || defaultMemberState(memberId, resolvedName);
+
+      // Heuristic: if existing name looks like a bare phone number and we found a better display name, update it.
+      if (state && state.name && resolvedName && state.name !== resolvedName) {
+        const isNumberLike = /^\+?\d{8,15}$/.test(state.name);
+        if (isNumberLike) {
+          state.name = resolvedName;
+          state.lastUpdated = Date.now();
+          saveJSON(memberFile, state);
+        }
+      }
+      // Persist newly created member
+      if (!existing) {
+        saveJSON(memberFile, state);
+      }
       return state;
     }));
   } catch (e) {
@@ -358,6 +370,28 @@ client.on('message', async msg => {
       const contact = await client.getContactById(contactId);
       senderName = contact?.name || contact?.pushname || contact?.verifiedName || contact?.shortName || contact?.number || senderName;
     } catch (_) {}
+
+    // --- One-time member name enrichment using notifyName ---
+    // Requirement: On the first received message from a participant, if stored name is a number-like value
+    // replace it with the available senderName (prefer notifyName) and never change again.
+    if (isGroupMsg) {
+      const memberId = msg.author || msg.from; // participant id for group messages
+      const groupDir = getGroupDir(msg.from);
+      const memberFile = path.join(groupDir, `${memberId}.json`);
+      const existing = loadJSON(memberFile, null);
+      if (existing) {
+        const isNumberLike = existing.name && /^\+?\d{8,15}$/.test(existing.name);
+        if (isNumberLike && senderName && senderName.trim().length > 0) {
+          existing.name = senderName.trim();
+          existing.lastUpdated = Date.now();
+          saveJSON(memberFile, existing);
+        }
+      } else {
+        // Member file not yet created; create with senderName (or fallback)
+        const state = defaultMemberState(memberId, senderName || memberId);
+        saveJSON(memberFile, state);
+      }
+    }
 
     messageBuffer.push({
       from: msg.from,
