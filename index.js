@@ -391,7 +391,7 @@ client.on('message', async msg => {
           const contactId = p.id;
           console.log('Contact id:', contactId);
           try {
-            const contact = await client.getContactById(contactId);
+            const contact = await client.getContactById(pid);
             console.log('Pushname :', contact?.pushname, 'Name:', contact?.name);
             return contact?.pushname || contact?.name || pid;
           } catch (_) {
