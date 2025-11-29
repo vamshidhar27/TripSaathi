@@ -409,7 +409,7 @@ client.on('message', async msg => {
       chatId: msg.from,
       timestamp: msg.timestamp,
       author: msg.author || null,
-      senderName,
+      senderName: msg._data?.notifyName || null,
       msgObj: msg // keep reference for reply
     });
 
