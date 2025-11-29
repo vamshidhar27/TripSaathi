@@ -386,7 +386,7 @@ client.on('message', async msg => {
         const chat = await client.getChatById(msg.from);
         const participants = chat.participants || [];
         const names = await Promise.all(participants.map(async (p) => {
-          const pid = p.id?._serialized;
+          const pid = p.id?.user;
           console.log('Fetching name for participant id:', pid);
           const contactId = p.id;
           console.log('Contact id:', contactId);
