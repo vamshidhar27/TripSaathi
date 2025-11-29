@@ -29,6 +29,7 @@ const CONFIG = {
 let lastGroupChatId = null;      // last active group chat ID ("...@g.us")
 let messageBuffer = [];          // collected messages within the batch window
 let bufferTimer = null;          // timer handle for batch window
+const participantsNameCache = new Map(); // groupId -> Map(memberId -> displayName)
 
 // Helper to add a random delay (min-max ms)
 /**
@@ -252,12 +253,12 @@ async function loadGroupAndMembersState(chat) {
   try {
     const participants = chat.participants || [];
     members = await Promise.all(participants.map(async (p) => {
-      const memberId = p.id?._serialized || p.id?.user || 'unknown';
-      // Attempt to resolve contact name via WhatsApp API (use global client)
-      let resolvedName = p.name || p.pushname || p.formattedName || p.id?.user || null;
+      const memberId = p.id;
+      // Attempt to resolve contact via contact id, preferring name then pushname
+      let resolvedName = null;
       try {
         const contact = await client.getContactById(memberId);
-        resolvedName = contact?.name || contact?.pushname || contact?.verifiedName || contact?.shortName || contact?.number || resolvedName;
+        resolvedName = contact?.name || contact?.pushname || null;
       } catch (_) {}
       const memberFile = path.join(dir, `${memberId}.json`);
       const existing = loadJSON(memberFile, null);
@@ -365,11 +366,20 @@ client.on('message', async msg => {
     }
     // Try to resolve sender display name
     let senderName = msg._data?.notifyName || null;
-    try {
-      const contactId = isGroupMsg ? (msg.author || msg.from) : msg.from;
-      const contact = await client.getContactById(contactId);
-      senderName = contact?.name || contact?.pushname || contact?.verifiedName || contact?.shortName || contact?.number || senderName;
-    } catch (_) {}
+    const contactId = isGroupMsg ? (msg.author || msg.from) : msg.from;
+    // Prefer cached participant names for groups
+    if (isGroupMsg) {
+      const nameMap = participantsNameCache.get(msg.from);
+      const cached = nameMap?.get(contactId);
+      if (cached) senderName = cached;
+    }
+    // If not cached, resolve via contact (prefer name then pushname)
+    if (!senderName) {
+      try {
+        const contact = await client.getContactById(contactId);
+        senderName = contact?.name || contact?.pushname || senderName;
+      } catch (_) {}
+    }
 
     // --- One-time member name enrichment using notifyName ---
     // Requirement: On the first received message from a participant, if stored name is a number-like value
