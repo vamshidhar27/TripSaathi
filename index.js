@@ -66,7 +66,20 @@ async function safeGetContactById(id) {
       console.warn('safeGetContactById: invalid id', id);
       return null;
     }
-    return await client.getContactById(serialized);
+    // Primary path
+    try {
+      return await client.getContactById(serialized);
+    } catch (inner) {
+      // Fallback: scan all contacts and match by id._serialized
+      try {
+        const all = await client.getContacts();
+        const found = all.find(c => c?.id?._serialized === serialized);
+        if (found) return found;
+      } catch (scanErr) {
+        console.warn('safeGetContactById: fallback scan failed for id', serialized, scanErr.message);
+      }
+      throw inner;
+    }
   } catch (e) {
     console.warn('safeGetContactById: failed for id', id, e.message);
     return null;
