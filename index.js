@@ -9,7 +9,7 @@
  * - (Optional) Admin commands can be added, but are removed per request
  */
 
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const axios = require('axios');
 const fs = require('fs');
@@ -18,7 +18,7 @@ const path = require('path');
 // === Configuration ===
 // Centralize runtime configuration and allow overrides via environment.
 const CONFIG = {
-  n8nWebhookUrl: process.env.N8N_WEBHOOK_URL || 'https://tripsaathi-travelassitant.app.n8n.cloud/webhook-test/send-messages',
+  n8nWebhookUrl: process.env.N8N_WEBHOOK_URL || 'https://tripsaathi-travelassitant.app.n8n.cloud/webhook/send-messages',
   batchWindowMs: parseInt(process.env.BATCH_WINDOW_MS || '10000', 10),
   axiosTimeoutMs: parseInt(process.env.AXIOS_TIMEOUT_MS || '20000', 10),
   puppeteerHeadless: process.env.PUPPETEER_HEADLESS !== 'false'
@@ -29,7 +29,6 @@ const CONFIG = {
 let lastGroupChatId = null;      // last active group chat ID ("...@g.us")
 let messageBuffer = [];          // collected messages within the batch window
 let bufferTimer = null;          // timer handle for batch window
-const participantsNameCache = new Map(); // groupId -> Map(memberId -> displayName)
 // Hardcoded member ID -> display name mapping (override when known)
 // Fill with entries like: { '919876543210@c.us': 'Alice', '911234567890@c.us': 'Bob' }
 const HARDCODED_MEMBER_NAMES = {
@@ -37,30 +36,6 @@ const HARDCODED_MEMBER_NAMES = {
   '919573838939@c.us': 'Krishna',
   '917013614596@c.us': 'Vamshidhar'
 };
-
-// Helper to add a random delay (min-max ms)
-/**
- * Optional human-like delay before sending messages.
- * @param {number} [min=1200] - Minimum ms.
- * @param {number} [max=3500] - Maximum ms.
- * @returns {Promise<void>} resolves after delay
- */
-function randomDelay(min = 1200, max = 3500) {
-  return new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * (max - min + 1)) + min));
-}
-
-/**
- * Format a JS Date or millisecond epoch to DD-MM-YYYY.
- * @param {number|Date} dateInput
- * @returns {string}
- */
-function formatDateDDMMYYYY(dateInput) {
-  const d = dateInput instanceof Date ? dateInput : new Date(dateInput);
-  const dd = String(d.getDate()).padStart(2, '0');
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const yyyy = d.getFullYear();
-  return `${dd}-${mm}-${yyyy}`;
-}
 
 // === Client Initialization ===
 // Create WhatsApp client with LocalAuth to persist session (no QR each restart).
@@ -95,6 +70,30 @@ client.on('ready', async () => {
 // === Simple state management (per-group and per-member JSONs) ===
 const DATA_DIR = path.join(__dirname, 'data');
 const GROUPS_DIR = path.join(DATA_DIR, 'groups');
+
+// Helper to add a random delay (min-max ms)
+/**
+ * Optional human-like delay before sending messages.
+ * @param {number} [min=1200] - Minimum ms.
+ * @param {number} [max=3500] - Maximum ms.
+ * @returns {Promise<void>} resolves after delay
+ */
+function randomDelay(min = 1200, max = 3500) {
+  return new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * (max - min + 1)) + min));
+}
+
+/**
+ * Format a JS Date or millisecond epoch to DD-MM-YYYY.
+ * @param {number|Date} dateInput
+ * @returns {string}
+ */
+function formatDateDDMMYYYY(dateInput) {
+  const d = dateInput instanceof Date ? dateInput : new Date(dateInput);
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  return `${dd}-${mm}-${yyyy}`;
+}
 
 /** Ensure required data directories exist. */
 function ensureDirs() {
@@ -155,51 +154,37 @@ function saveJSON(filePath, obj) {
  */
 function defaultGroupState() {
   return {
-    topic: null,                        // High-level trip theme (e.g., beach, culture)
-    purpose: null,                      // leisure | business | family | adventure | other
-    originCities: [],                   // list of departure cities for members
-    candidateDestinations: [],          // destinations mentioned but not yet finalized
-    destination: null,                  // chosen destination (string)
-    dates: {                            // target travel dates
-      start: null,
-      end: null,
-      flexibility: 'flexible'           // flexible | semi-flexible | fixed
-    },
-    durationNights: null,               // derived or explicitly set
+    // purpose: '*',                      // leisure | business | family | adventure | other
+    groupSize: '*',                    // expected number of travelers
+    originCities: ['*'],                   // list of departure cities for members
     budgetRange: {                      // group level budget understanding
-      min: null,
-      max: null,
+      min: '*',
+      max: '*',
       currency: 'INR',
       perPerson: true,                  // true if min/max are per-person values
-      totalEstimate: null               // optional aggregate figure
+      // totalEstimate: null               // optional aggregate figure
     },
-    headcount: null,                    // expected number of travelers
+    topic: '*',                        // High-level trip theme (e.g., beach, culture)
+    candidateDestinations: ['*'],          // destinations mentioned but not yet finalized
+    destination: '*',                  // chosen destination (string)
+    candidateDateWindows: ['*'],
+    dates: {                            // target travel dates
+      start: '*',
+      end: '*',
+      // flexibility: 'flexible'           // flexible | semi-flexible | fixed
+    },
+    transportMode: '*',               // flight | train | road | mixed
+    stayType: '*',                    // hotel | villa | hostel | resort | homestay
+    stayNoOfDays: '*',                 // explicitly set number of nights
+    candidateStayNames: ['*'],                     // specific accommodations mentioned
+    FinalStayName: '*',                  // chosen accommodation
+    // durationNights: null,               // derived or explicitly set
     preferences: {                      // aggregated preference signals
-      stayType: null,                   // hotel | villa | hostel | resort | homestay
-      accommodationStars: null,         // desired star rating or quality band
-      roomsNeeded: null,                // number of rooms needed
-      roomSharingPolicy: null,          // sharing rules (e.g., double, single)
-      transport: null,                  // flight | train | road | mixed
-      flightCabin: null,                // economy | premium | business | first
-      trainClass: null,                 // sleeper | 3AC | 2AC | CC
-      pace: 'balanced',                 // relaxed | balanced | packed
       activityInterests: [],            // beaches, trekking, museums, nightlife
       foodPreferences: [],              // veg, non-veg, vegan, local cuisine
       dietaryRestrictions: [],          // lactose-free, gluten-free, etc.
       mustSee: [],                      // must-see POIs mentioned
       avoid: []                         // places/activities to avoid
-    },
-    consensus: {                        // decision state tracking
-      status: 'unknown',                // unknown | gathering | options_proposed | voting | agreed | blocked
-      blockers: [],                     // list of short blocker descriptions
-      lastOptionSet: [],                // array of last proposed option summaries
-      selectedOption: null              // winning option reference/string
-    },
-    timeline: {                         // important planning timestamps
-      planningStart: Date.now(),
-      bookingDeadline: null,
-      departure: null,
-      return: null
     },
     bookingProgress: {                  // progress markers per component
       flights: 'pending',               // pending | research | quoted | booked
@@ -207,7 +192,6 @@ function defaultGroupState() {
       activities: 'pending',
       localTransport: 'pending'
     },
-    notes: [],                          // free-form aggregated notes fragments
     lastUpdated: Date.now()
   };
 }
@@ -222,14 +206,18 @@ function defaultMemberState(memberId, memberName) {
   return {
     id: memberId,
     name: memberName || null,
-    homeCity: null,                     // city of departure
-    budget: { amount: null, currency: 'INR', ceiling: null },
-    budgetFlexibility: 'flexible',      // strict | flexible
-    destinationPrefs: [],               // preferred destinations
-    avoidanceList: [],                  // destinations to avoid
-    dateFlexibility: 'flexible',        // fixed | flexible | semi-flexible
-    availabilityWindows: [],            // [{ start, end }]
-    role: 'member',                     // member | planner | decision | finance | logistics
+    originCity: '*',                     // city of departure
+    budget: { amount: '*', currency: 'INR'},
+    topic: '*',                        // High-level trip theme (e.g., beach, culture)
+    // budgetFlexibility: 'flexible',      // strict | flexible
+    destinationPrefs: ['*'],               // preferred destinations
+    // avoidanceList: [],                  // destinations to avoid
+    // dateFlexibility: 'flexible',        // fixed | flexible | semi-flexible
+    availabilityWindows: ['*'],            // [{ start, end }]
+    // role: 'member',                     // member | planner | decision | finance | logistics
+    transportMode: '*',               // flight | train | road | mixed
+    stayType: '*',                    // hotel | villa | hostel | resort | homestay
+    stayPreferences: ['*'],               // specific accommodation preferences
     commitments: {                      // member commitment clarity
       canTravel: null,                  // true | false | tentative
       reason: null,                     // reason if cannot or tentative
@@ -246,14 +234,14 @@ function defaultMemberState(memberId, memberName) {
       roomSharing: 'ok',                // ok | preferPrivate | no
       pace: 'balanced'                  // relaxed | balanced | busy
     },
-    travelDocuments: {                  // travel documentation state
-      passportExpiry: null,
-      visaNeeded: null,                 // true | false | unknown
-      visaStatus: null,                 // not_started | in_progress | approved | rejected
-      visaNotes: null
-    },
-    healthNotes: [],                    // any declared health considerations
-    communicationStyle: 'concise',      // concise | detailed | emoji
+    // travelDocuments: {                  // travel documentation state
+    //   passportExpiry: null,
+    //   visaNeeded: null,                 // true | false | unknown
+    //   visaStatus: null,                 // not_started | in_progress | approved | rejected
+    //   visaNotes: null
+    // },
+    // healthNotes: [],                    // any declared health considerations
+    // communicationStyle: 'concise',      // concise | detailed | emoji
     lastUpdated: Date.now()
   };
 }
