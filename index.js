@@ -380,7 +380,7 @@ async function sendToN8n(payload) {
         headers: { 'Content-Type': 'application/json' }
       }
     );
-    console.log('n8nResponse.data:', res.data);
+    console.log('n8nResponse.data:', res.data[0]);
     return res.data;
   } catch (err) {
     console.error('Error sending batch to n8n webhook:', err.message);
