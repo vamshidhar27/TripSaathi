@@ -386,9 +386,10 @@ client.on('message', async msg => {
         const chat = await client.getChatById(msg.from);
         const participants = chat.participants || [];
         const names = await Promise.all(participants.map(async (p) => {
-          const pid = p.id?._serialized || p.id;
+          const pid = p.id?._serialized;
+          const contactId = p.id;
           try {
-            const contact = await client.getContactById(pid);
+            const contact = await client.getContactById(contactId);
             return contact?.pushname || contact?.name || pid;
           } catch (_) {
             return pid;
