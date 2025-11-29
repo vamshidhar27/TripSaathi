@@ -54,6 +54,24 @@ function formatDateDDMMYYYY(dateInput) {
   const yyyy = d.getFullYear();
   return `${dd}-${mm}-${yyyy}`;
 }
+/**
+ * Safely resolve a Contact from various id shapes.
+ * @param {string|{_serialized:string}} id
+ * @returns {Promise<import('whatsapp-web.js').Contact|null>}
+ */
+async function safeGetContactById(id) {
+  try {
+    const serialized = typeof id === 'string' ? id : id?._serialized;
+    if (!serialized || typeof serialized !== 'string') {
+      console.warn('safeGetContactById: invalid id', id);
+      return null;
+    }
+    return await client.getContactById(serialized);
+  } catch (e) {
+    console.warn('safeGetContactById: failed for id', id, e.message);
+    return null;
+  }
+}
 
 // === Client Initialization ===
 // Create WhatsApp client with LocalAuth to persist session (no QR each restart).
@@ -270,7 +288,7 @@ async function loadGroupAndMembersState(chat) {
       // Attempt to resolve contact via contact id, preferring name then pushname
       let resolvedName = null;
       try {
-        const contact = await client.getContactById(memberId);
+        const contact = await safeGetContactById(memberId);
         resolvedName = contact?.name || contact?.pushname || null;
       } catch (_) {}
       const memberFile = path.join(dir, `${memberId}.json`);
@@ -385,19 +403,19 @@ client.on('message', async msg => {
       try {
         const chat = await client.getChatById(msg.from);
         const participants = chat.participants || [];
-        const names = await Promise.all(participants.map(async (p) => {
-          const pid = p.id?.user;
-          console.log('Fetching name for participant id:', pid);
-          const contactId = p.id;
-          console.log('Contact id:', contactId);
-          try {
-            const contact = await client.getContactById(pid);
-            console.log('Pushname :', contact?.pushname, 'Name:', contact?.name);
-            return contact?.pushname || contact?.name || pid;
-          } catch (_) {
-            return pid;
-          }
-        }));
+            const names = await Promise.all(participants.map(async (p) => {
+              const pid = p.id?._serialized || p.id;
+              console.log('Fetching name for participant id:', pid);
+              const contactId = p.id?._serialized || p.id;
+              console.log('Contact id:', contactId);
+              try {
+                const contact = await safeGetContactById(contactId);
+                console.log('Pushname :', contact?.pushname, 'Name:', contact?.name);
+                return contact?.pushname || contact?.name || pid;
+              } catch (_) {
+                return pid;
+              }
+            }));
         console.log('Group participant pushnames:', names);
       } catch (e) {
         console.warn('Could not fetch participants/pushnames:', e.message);
