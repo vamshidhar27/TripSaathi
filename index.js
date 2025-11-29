@@ -18,7 +18,7 @@ const path = require('path');
 // === Configuration ===
 // Centralize runtime configuration and allow overrides via environment.
 const CONFIG = {
-  n8nWebhookUrl: process.env.N8N_WEBHOOK_URL || 'https://tripsaathitest.app.n8n.cloud/webhook/7c0d1a7c-2f7d-4af2-836d-535f160660d9',
+  n8nWebhookUrl: process.env.N8N_WEBHOOK_URL || 'https://tripsaathi-travelassitant.app.n8n.cloud/webhook-test/send-messages',
   batchWindowMs: parseInt(process.env.BATCH_WINDOW_MS || '10000', 10),
   axiosTimeoutMs: parseInt(process.env.AXIOS_TIMEOUT_MS || '20000', 10),
   puppeteerHeadless: process.env.PUPPETEER_HEADLESS !== 'false'
