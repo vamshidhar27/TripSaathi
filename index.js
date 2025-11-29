@@ -134,14 +134,59 @@ function saveJSON(filePath, obj) {
  */
 function defaultGroupState() {
   return {
-    topic: null,
-    destination: null,
-    dates: { start: null, end: null },
-    budgetRange: { min: null, max: null, currency: 'INR' },
-    headcount: null,
-    preferences: { stayType: null, transport: null, pace: 'balanced' },
-    consensus: { status: 'unknown', blockers: [] },
-    adminControls: { locked: false, quietHours: null },
+    topic: null,                        // High-level trip theme (e.g., beach, culture)
+    purpose: null,                      // leisure | business | family | adventure | other
+    originCities: [],                   // list of departure cities for members
+    candidateDestinations: [],          // destinations mentioned but not yet finalized
+    destination: null,                  // chosen destination (string)
+    dates: {                            // target travel dates
+      start: null,
+      end: null,
+      flexibility: 'flexible'           // flexible | semi-flexible | fixed
+    },
+    durationNights: null,               // derived or explicitly set
+    budgetRange: {                      // group level budget understanding
+      min: null,
+      max: null,
+      currency: 'INR',
+      perPerson: true,                  // true if min/max are per-person values
+      totalEstimate: null               // optional aggregate figure
+    },
+    headcount: null,                    // expected number of travelers
+    preferences: {                      // aggregated preference signals
+      stayType: null,                   // hotel | villa | hostel | resort | homestay
+      accommodationStars: null,         // desired star rating or quality band
+      roomsNeeded: null,                // number of rooms needed
+      roomSharingPolicy: null,          // sharing rules (e.g., double, single)
+      transport: null,                  // flight | train | road | mixed
+      flightCabin: null,                // economy | premium | business | first
+      trainClass: null,                 // sleeper | 3AC | 2AC | CC
+      pace: 'balanced',                 // relaxed | balanced | packed
+      activityInterests: [],            // beaches, trekking, museums, nightlife
+      foodPreferences: [],              // veg, non-veg, vegan, local cuisine
+      dietaryRestrictions: [],          // lactose-free, gluten-free, etc.
+      mustSee: [],                      // must-see POIs mentioned
+      avoid: []                         // places/activities to avoid
+    },
+    consensus: {                        // decision state tracking
+      status: 'unknown',                // unknown | gathering | options_proposed | voting | agreed | blocked
+      blockers: [],                     // list of short blocker descriptions
+      lastOptionSet: [],                // array of last proposed option summaries
+      selectedOption: null              // winning option reference/string
+    },
+    timeline: {                         // important planning timestamps
+      planningStart: Date.now(),
+      bookingDeadline: null,
+      departure: null,
+      return: null
+    },
+    bookingProgress: {                  // progress markers per component
+      flights: 'pending',               // pending | research | quoted | booked
+      stay: 'pending',
+      activities: 'pending',
+      localTransport: 'pending'
+    },
+    notes: [],                          // free-form aggregated notes fragments
     lastUpdated: Date.now()
   };
 }
@@ -156,12 +201,38 @@ function defaultMemberState(memberId, memberName) {
   return {
     id: memberId,
     name: memberName || null,
-    budget: { amount: null, currency: 'INR' },
-    destinationPrefs: [],
-    dateFlexibility: 'flexible',
-    role: 'member',
-    commitments: { canTravel: null, notes: null },
-    preferences: { food: null, activities: [], stayType: null },
+    homeCity: null,                     // city of departure
+    budget: { amount: null, currency: 'INR', ceiling: null },
+    budgetFlexibility: 'flexible',      // strict | flexible
+    destinationPrefs: [],               // preferred destinations
+    avoidanceList: [],                  // destinations to avoid
+    dateFlexibility: 'flexible',        // fixed | flexible | semi-flexible
+    availabilityWindows: [],            // [{ start, end }]
+    role: 'member',                     // member | planner | decision | finance | logistics
+    commitments: {                      // member commitment clarity
+      canTravel: null,                  // true | false | tentative
+      reason: null,                     // reason if cannot or tentative
+      tentative: null                   // extra flag for tentative state
+    },
+    preferences: {                      // personal preferences
+      food: null,
+      dietaryRestrictions: [],
+      allergies: [],
+      activities: [],
+      stayType: null,
+      preferredAmenities: [],           // pool, wifi, kitchen, parking
+      transportPrefs: { flightCabin: null, trainClass: null, carType: null },
+      roomSharing: 'ok',                // ok | preferPrivate | no
+      pace: 'balanced'                  // relaxed | balanced | busy
+    },
+    travelDocuments: {                  // travel documentation state
+      passportExpiry: null,
+      visaNeeded: null,                 // true | false | unknown
+      visaStatus: null,                 // not_started | in_progress | approved | rejected
+      visaNotes: null
+    },
+    healthNotes: [],                    // any declared health considerations
+    communicationStyle: 'concise',      // concise | detailed | emoji
     lastUpdated: Date.now()
   };
 }
@@ -182,7 +253,12 @@ async function loadGroupAndMembersState(chat) {
     const participants = chat.participants || [];
     members = await Promise.all(participants.map(async (p) => {
       const memberId = p.id?._serialized || p.id?.user || 'unknown';
-      const name = p.name || p.pushname || p.formattedName || p.id?.user || null;
+      // Attempt to resolve contact name via WhatsApp API
+      let name = p.name || p.pushname || p.formattedName || p.id?.user || null;
+      try {
+        const contact = await chat.client.getContactById(memberId);
+        name = contact?.name || contact?.pushname || contact?.verifiedName || contact?.shortName || contact?.number || name;
+      } catch (_) {}
       const memberFile = path.join(dir, `${memberId}.json`);
       const existing = loadJSON(memberFile, null);
       const state = existing || defaultMemberState(memberId, name);
@@ -239,10 +315,6 @@ function buildN8nPayload(messages, groupState, members, chat, groupDir) {
       groupId: chat.id._serialized,
       timestamp: Date.now()
     },
-    instructions: {
-      system: 'You are TripSaathi, an AI travel agent embedded into a WhatsApp group. Detect travel intent, reduce friction, coordinate consensus, and when appropriate, guide planning, quotes, and booking steps inline. Be concise and avoid spamming; reply at most once per batch and use actionable next steps. If no travel intent, respond with "skip".',
-      style: 'Clear bullets, short actionable steps, ask for missing info, propose consensus options, and confirm before committing to bookings.'
-    },
     _groupDir: groupDir // internal only; stripped before sending
   };
 }
@@ -279,6 +351,14 @@ client.on('message', async msg => {
     if (isGroupMsg) {
       lastGroupChatId = msg.from;
     }
+    // Try to resolve sender display name
+    let senderName = msg._data?.notifyName || null;
+    try {
+      const contactId = isGroupMsg ? (msg.author || msg.from) : msg.from;
+      const contact = await client.getContactById(contactId);
+      senderName = contact?.name || contact?.pushname || contact?.verifiedName || contact?.shortName || contact?.number || senderName;
+    } catch (_) {}
+
     messageBuffer.push({
       from: msg.from,
       body: msg.body,
@@ -286,7 +366,7 @@ client.on('message', async msg => {
       chatId: msg.from,
       timestamp: msg.timestamp,
       author: msg.author || null,
-      senderName: msg._data?.notifyName || null,
+      senderName,
       msgObj: msg // keep reference for reply
     });
 
