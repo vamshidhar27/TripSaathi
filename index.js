@@ -30,6 +30,13 @@ let lastGroupChatId = null;      // last active group chat ID ("...@g.us")
 let messageBuffer = [];          // collected messages within the batch window
 let bufferTimer = null;          // timer handle for batch window
 const participantsNameCache = new Map(); // groupId -> Map(memberId -> displayName)
+// Hardcoded member ID -> display name mapping (override when known)
+// Fill with entries like: { '919876543210@c.us': 'Alice', '911234567890@c.us': 'Bob' }
+const HARDCODED_MEMBER_NAMES = {
+  '918965012692@c.us': 'TripSaathi',
+  '919573838939@c.us': 'Krishna',
+  '917013614596@c.us': 'Vamshidhar'
+};
 
 // Helper to add a random delay (min-max ms)
 /**
@@ -53,37 +60,6 @@ function formatDateDDMMYYYY(dateInput) {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const yyyy = d.getFullYear();
   return `${dd}-${mm}-${yyyy}`;
-}
-/**
- * Safely resolve a Contact from various id shapes.
- * @param {string|{_serialized:string}} id
- * @returns {Promise<import('whatsapp-web.js').Contact|null>}
- */
-async function safeGetContactById(id) {
-  try {
-    const serialized = typeof id === 'string' ? id : id?._serialized;
-    if (!serialized || typeof serialized !== 'string') {
-      console.warn('safeGetContactById: invalid id', id);
-      return null;
-    }
-    // Primary path
-    try {
-      return await client.getContactById(serialized);
-    } catch (inner) {
-      // Fallback: scan all contacts and match by id._serialized
-      try {
-        const all = await client.getContacts();
-        const found = all.find(c => c?.id?._serialized === serialized);
-        if (found) return found;
-      } catch (scanErr) {
-        console.warn('safeGetContactById: fallback scan failed for id', serialized, scanErr.message);
-      }
-      throw inner;
-    }
-  } catch (e) {
-    console.warn('safeGetContactById: failed for id', id, e.message);
-    return null;
-  }
 }
 
 // === Client Initialization ===
@@ -295,14 +271,26 @@ async function loadGroupAndMembersState(chat) {
 
   let members = [];
   try {
-    const participants = chat.participants || [];
+    let participants = chat.participants || [];
+    // Exclude ourselves from members list
+    try {
+      const myId = client.info?.wid?._serialized || client.info?.wid || null;
+      if (myId) {
+        participants = participants.filter(p => (p.id?._serialized || p.id) !== myId && p.isMe !== true);
+      }
+    } catch (_) {}
     members = await Promise.all(participants.map(async (p) => {
       const memberId = p.id?._serialized || p.id;
       // Attempt to resolve contact via contact id, preferring name then pushname
       let resolvedName = null;
+      // 1) Hardcoded override if available
+      if (HARDCODED_MEMBER_NAMES[memberId]) {
+        resolvedName = HARDCODED_MEMBER_NAMES[memberId];
+      }
       try {
-        const contact = await safeGetContactById(memberId);
-        resolvedName = contact?.name || contact?.pushname || null;
+        if (!resolvedName) {
+          resolvedName = p.id.user || null;
+        }
       } catch (_) {}
       const memberFile = path.join(dir, `${memberId}.json`);
       const existing = loadJSON(memberFile, null);
