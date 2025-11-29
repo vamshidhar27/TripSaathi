@@ -42,6 +42,19 @@ function randomDelay(min = 1200, max = 3500) {
   return new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * (max - min + 1)) + min));
 }
 
+/**
+ * Format a JS Date or millisecond epoch to DD-MM-YYYY.
+ * @param {number|Date} dateInput
+ * @returns {string}
+ */
+function formatDateDDMMYYYY(dateInput) {
+  const d = dateInput instanceof Date ? dateInput : new Date(dateInput);
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  return `${dd}-${mm}-${yyyy}`;
+}
+
 // === Client Initialization ===
 // Create WhatsApp client with LocalAuth to persist session (no QR each restart).
 const client = new Client({
@@ -326,7 +339,8 @@ function buildN8nPayload(messages, groupState, members, chat, groupDir) {
     meta: {
       groupName: chat.name,
       groupId: chat.id._serialized,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      dateStr: formatDateDDMMYYYY(Date.now())
     },
     _groupDir: groupDir // internal only; stripped before sending
   };
@@ -421,7 +435,7 @@ client.on('message', async msg => {
           // Build base messages for payload
           let payload = { messages: messageBuffer.map(m => ({
             message: m.body,
-            chatId: m.chatId,
+            // chatId: m.chatId,
             senderName: m.senderName
           })) };
           // Enrich with group + members state to give AI context
