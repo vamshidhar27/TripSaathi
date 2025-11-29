@@ -400,27 +400,6 @@ client.on('message', async msg => {
     const isGroupMsg = msg.from.endsWith('@g.us');
     if (isGroupMsg) {
       lastGroupChatId = msg.from;
-      // Log all participants' push names for visibility
-      try {
-        const chat = await client.getChatById(msg.from);
-        const participants = chat.participants || [];
-            const names = await Promise.all(participants.map(async (p) => {
-              const pid = p.id?._serialized || p.id;
-              console.log('Fetching name for participant id:', pid);
-              const contactId = p.id?._serialized || p.id;
-              console.log('Contact id:', contactId);
-              try {
-                const contact = await safeGetContactById(contactId);
-                console.log('Pushname :', contact?.pushname, 'Name:', contact?.name);
-                return contact?.pushname || contact?.name || pid;
-              } catch (_) {
-                return pid;
-              }
-            }));
-        console.log('Group participant pushnames:', names);
-      } catch (e) {
-        console.warn('Could not fetch participants/pushnames:', e.message);
-      }
     }
 
     messageBuffer.push({
