@@ -266,7 +266,7 @@ async function loadGroupAndMembersState(chat) {
   try {
     const participants = chat.participants || [];
     members = await Promise.all(participants.map(async (p) => {
-      const memberId = p.id;
+      const memberId = p.id?._serialized || p.id;
       // Attempt to resolve contact via contact id, preferring name then pushname
       let resolvedName = null;
       try {
@@ -277,15 +277,6 @@ async function loadGroupAndMembersState(chat) {
       const existing = loadJSON(memberFile, null);
       let state = existing || defaultMemberState(memberId, resolvedName);
 
-      // Heuristic: if existing name looks like a bare phone number and we found a better display name, update it.
-      if (state && state.name && resolvedName && state.name !== resolvedName) {
-        const isNumberLike = /^\+?\d{8,15}$/.test(state.name);
-        if (isNumberLike) {
-          state.name = resolvedName;
-          state.lastUpdated = Date.now();
-          saveJSON(memberFile, state);
-        }
-      }
       // Persist newly created member
       if (!existing) {
         saveJSON(memberFile, state);
@@ -332,10 +323,16 @@ function persistUpdatedStates(groupDir, updated) {
  * @returns {object} payload with metadata and instructions
  */
 function buildN8nPayload(messages, groupState, members, chat, groupDir) {
+  // Ensure we send plain JSON objects (no class instances, proxies)
+  const safeGroup = JSON.parse(JSON.stringify(groupState || {}));
+  const safeMembers = Array.isArray(members)
+    ? JSON.parse(JSON.stringify(members))
+    : [];
+
   return {
     messages,
-    group: groupState,
-    members,
+    group: safeGroup,
+    members: safeMembers,
     meta: {
       groupName: chat.name,
       groupId: chat.id._serialized,
@@ -356,7 +353,14 @@ async function sendToN8n(payload) {
   delete axiosPayload._groupDir;
   try {
     console.log('Sending batch payload to n8n:', axiosPayload);
-    const res = await axios.post(CONFIG.n8nWebhookUrl, axiosPayload, { timeout: CONFIG.axiosTimeoutMs });
+    const res = await axios.post(
+      CONFIG.n8nWebhookUrl,
+      axiosPayload,
+      {
+        timeout: CONFIG.axiosTimeoutMs,
+        headers: { 'Content-Type': 'application/json' }
+      }
+    );
     console.log('n8nResponse.data:', res.data);
     return res.data;
   } catch (err) {
@@ -377,43 +381,22 @@ client.on('message', async msg => {
     const isGroupMsg = msg.from.endsWith('@g.us');
     if (isGroupMsg) {
       lastGroupChatId = msg.from;
-    }
-    // Try to resolve sender display name
-    let senderName = msg._data?.notifyName || null;
-    const contactId = isGroupMsg ? (msg.author || msg.from) : msg.from;
-    // Prefer cached participant names for groups
-    if (isGroupMsg) {
-      const nameMap = participantsNameCache.get(msg.from);
-      const cached = nameMap?.get(contactId);
-      if (cached) senderName = cached;
-    }
-    // If not cached, resolve via contact (prefer name then pushname)
-    if (!senderName) {
+      // Log all participants' push names for visibility
       try {
-        const contact = await client.getContactById(contactId);
-        senderName = contact?.name || contact?.pushname || senderName;
-      } catch (_) {}
-    }
-
-    // --- One-time member name enrichment using notifyName ---
-    // Requirement: On the first received message from a participant, if stored name is a number-like value
-    // replace it with the available senderName (prefer notifyName) and never change again.
-    if (isGroupMsg) {
-      const memberId = msg.author || msg.from; // participant id for group messages
-      const groupDir = getGroupDir(msg.from);
-      const memberFile = path.join(groupDir, `${memberId}.json`);
-      const existing = loadJSON(memberFile, null);
-      if (existing) {
-        const isNumberLike = existing.name && /^\+?\d{8,15}$/.test(existing.name);
-        if (isNumberLike && senderName && senderName.trim().length > 0) {
-          existing.name = senderName.trim();
-          existing.lastUpdated = Date.now();
-          saveJSON(memberFile, existing);
-        }
-      } else {
-        // Member file not yet created; create with senderName (or fallback)
-        const state = defaultMemberState(memberId, senderName || memberId);
-        saveJSON(memberFile, state);
+        const chat = await client.getChatById(msg.from);
+        const participants = chat.participants || [];
+        const names = await Promise.all(participants.map(async (p) => {
+          const pid = p.id?._serialized || p.id;
+          try {
+            const contact = await client.getContactById(pid);
+            return contact?.pushname || contact?.name || pid;
+          } catch (_) {
+            return pid;
+          }
+        }));
+        console.log('Group participant pushnames:', names);
+      } catch (e) {
+        console.warn('Could not fetch participants/pushnames:', e.message);
       }
     }
 
