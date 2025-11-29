@@ -380,7 +380,7 @@ async function sendToN8n(payload) {
         headers: { 'Content-Type': 'application/json' }
       }
     );
-    console.log('n8nResponse.data:', res.data[0]);
+    console.log('n8nResponse.data:', res.data);
     return res.data;
   } catch (err) {
     console.error('Error sending batch to n8n webhook:', err.message);
@@ -430,7 +430,16 @@ client.on('message', async msg => {
             payload = buildN8nPayload(payload.messages, groupState, members, chat, groupDir);
           }
 
-          const data = await sendToN8n(payload);
+          let data = await sendToN8n(payload);
+          // Normalize to JSON: if webhook returned a JSON string, parse it
+          if (typeof data === 'string') {
+            try {
+              data = JSON.parse(data);
+            } catch (e) {
+              console.error('Failed to parse n8n response string as JSON:', e.message);
+              data = null;
+            }
+          }
           if (!data) {
             console.warn('No data from n8n; skipping send.');
             return;
