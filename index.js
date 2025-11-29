@@ -380,8 +380,22 @@ async function sendToN8n(payload) {
         headers: { 'Content-Type': 'application/json' }
       }
     );
-    console.log('n8nResponse.data:', res.data[0]);
-    return res.data;
+    console.log('n8nResponse.data (raw):');
+    try {
+      console.dir(res.data, { depth: null });
+    } catch (_) {
+      console.log(res.data);
+    }
+    // If n8n returned a JSON string (rare), parse it
+    let data = res.data[0];
+    if (typeof data === 'string') {
+      try {
+        data = JSON.parse(data);
+      } catch (e) {
+        console.error('Failed to parse n8n data string as JSON:', e.message);
+      }
+    }
+    return data;
   } catch (err) {
     console.error('Error sending batch to n8n webhook:', err.message);
     if (err.response) {
@@ -431,30 +445,24 @@ client.on('message', async msg => {
           }
 
           let data = await sendToN8n(payload);
-          // Normalize to JSON: if webhook returned a JSON string, parse it
-          if (typeof data === 'string') {
-            try {
-              data = JSON.parse(data);
-            } catch (e) {
-              console.error('Failed to parse n8n response string as JSON:', e.message);
-              data = null;
-            }
-          }
+          // Normalize shape: allow either {output:{response,updated}} or {response,updated}
+          const output = data && data.output ? data.output : data;
+          const responseText = output && typeof output.response === 'string' ? output.response : null;
+          const updatedFromOutput = output && output.updated ? output.updated : null;
           if (!data) {
             console.warn('No data from n8n; skipping send.');
             return;
           }
           // Persist any updated JSON states
           try {
-            if (payload._groupDir) {
-              persistUpdatedStates(payload._groupDir, data.updated);
+            if (payload._groupDir && updatedFromOutput) {
+              persistUpdatedStates(payload._groupDir, updatedFromOutput);
             }
           } catch (e) {
             console.error('Failed to persist updated states', e.message);
           }
           // Post response to group unless 'skip'
           if (lastGroupChatId) {
-            const responseText = data.output.response;
             if (typeof responseText === 'string' && responseText.trim().toLowerCase() === 'skip') {
               console.log('AI response is "skip". Not sending message to group.');
             } else if (typeof responseText === 'string' && responseText.trim().length > 0) {
