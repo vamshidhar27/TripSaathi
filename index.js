@@ -445,7 +445,7 @@ client.on('message', async msg => {
           }
           // Post response to group unless 'skip'
           if (lastGroupChatId) {
-            const responseText = data.response;
+            const responseText = data.output.response;
             if (typeof responseText === 'string' && responseText.trim().toLowerCase() === 'skip') {
               console.log('AI response is "skip". Not sending message to group.');
             } else if (typeof responseText === 'string' && responseText.trim().length > 0) {
